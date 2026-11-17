@@ -1,5 +1,4 @@
-const KEY = process.env.GEMINI_API_KEY;
-const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+const { askGemini } = require("./gemini");
 
 function getId(u) {
   try {
@@ -24,7 +23,6 @@ module.exports = async function clips(req, res) {
     const link = new URL(req.url, "http://x").searchParams.get("url");
     const id = getId(link || "");
     if (!id) return send(res, 400, { error: "Bad YouTube link" });
-    if (!KEY) return send(res, 500, { error: "GEMINI_API_KEY not set" });
 
     const prompt =
       "Find the 5 to 8 best moments in this video for short clips " +
@@ -33,34 +31,15 @@ module.exports = async function clips(req, res) {
       '{"moments":[{"title":"","reason":"","start":0,"end":0}]} ' +
       "start and end are whole seconds.";
 
-    const r = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": KEY,
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { file_data: { file_uri: "https://www.youtube.com/watch?v=" + id } },
-                { text: prompt },
-              ],
-            },
-          ],
-          generationConfig: { responseMimeType: "application/json" },
-        }),
-      }
+    const out = await askGemini(
+      [
+        { file_data: { file_uri: "https://www.youtube.com/watch?v=" + id } },
+        { text: prompt },
+      ],
+      { json: true, maxOutputTokens: 3000 }
     );
-    const data = await r.json();
-    if (!r.ok) {
-      return send(res, 502, { error: data.error?.message || "AI error" });
-    }
 
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-    const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
+    const parsed = JSON.parse(out.text.replace(/```json|```/g, "").trim());
     const moments = (parsed.moments || [])
       .map((m) => ({
         title: String(m.title || "Moment"),
