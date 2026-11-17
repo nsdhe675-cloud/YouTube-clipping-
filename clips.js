@@ -26,7 +26,7 @@ module.exports = async function clips(req, res) {
 
     const prompt =
       "Find the 5 to 8 best moments in this video for short clips " +
-      "(funny, surprising, useful or emotional). Each clip 15 to 60 seconds. " +
+      "(funny, surprising, useful or emotional). Each clip must be about 1 minute long, between 55 and 65 seconds, never longer. " +
       "Reply ONLY with JSON: " +
       '{"moments":[{"title":"","reason":"","start":0,"end":0}]} ' +
       "start and end are whole seconds.";
@@ -36,7 +36,12 @@ module.exports = async function clips(req, res) {
         { file_data: { file_uri: "https://www.youtube.com/watch?v=" + id } },
         { text: prompt },
       ],
-      { json: true, maxOutputTokens: 3000 }
+      {
+        json: true,
+        maxOutputTokens: 3000,
+        timeoutMs: 120000,
+        generationConfig: { mediaResolution: "MEDIA_RESOLUTION_LOW" },
+      }
     );
 
     const parsed = JSON.parse(out.text.replace(/```json|```/g, "").trim());
@@ -47,6 +52,7 @@ module.exports = async function clips(req, res) {
         start: Math.max(0, Math.floor(Number(m.start))),
         end: Math.floor(Number(m.end)),
       }))
+      .map((m) => ({ ...m, end: Math.min(m.end, m.start + 65) }))
       .filter((m) => Number.isFinite(m.start) && Number.isFinite(m.end) && m.end > m.start)
       .sort((a, b) => a.start - b.start)
       .slice(0, 8);
