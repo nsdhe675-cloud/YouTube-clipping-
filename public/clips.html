@@ -1,1 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clips - Winner Finder</title>
+<link rel="stylesheet" href="/clips-style.css">
+</head>
+<body>
+  <header class="top">
+    <a class="back" href="/">&larr; Back</a>
+    <h1>Clips</h1>
+  </header>
 
+  <main>
+    <p class="lead">Paste a YouTube video link, the video you want to clip. The AI finds the best moments and you can play each one.</p>
+
+    <form id="form" class="box" autocomplete="off">
+      <label for="url" class="sr">YouTube video link</label>
+      <input id="url" type="url" inputmode="url" placeholder="Paste a YouTube video link" required>
+      <button id="go" class="btn" type="submit">Find clips</button>
+    </form>
+
+    <p class="lead">To download a clip, choose your own video file. Only use videos you own or have permission to use.</p>
+
+    <div id="status" role="status" aria-live="polite"></div>
+    <div id="out" class="grid"></div>
+  </main>
+
+  <script src="/clips-cut-ui.js"></script>
+  <script src="/clips-ui.js"></script>
+</body>
+</html>
