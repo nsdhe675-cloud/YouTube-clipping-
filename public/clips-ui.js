@@ -63,6 +63,91 @@
 
   function clearStatus() { statusBox.textContent = ''; }
 
+  // ---- Clean clip player: plays only the cut part of YOUR OWN video file ----
+  var localUrl = null;
+  var pick = el('div', 'localpick');
+  var pickBtn = el('button', 'btn alt', 'Choose my video file (for clean clips)');
+  pick.style.cssText = 'margin:12px 0';
+  pickBtn.type = 'button';
+  var pickInfo = el('small', '', 'Optional. Pick the same video file once. Clips then play with no YouTube.');
+  var fileIn = document.createElement('input');
+  fileIn.type = 'file';
+  fileIn.accept = 'video/*';
+  fileIn.style.display = 'none';
+  pickBtn.onclick = function () { fileIn.click(); };
+  fileIn.onchange = function () {
+    var f = fileIn.files && fileIn.files[0];
+    if (!f) return;
+    if (localUrl) URL.revokeObjectURL(localUrl);
+    localUrl = URL.createObjectURL(f);
+    pickBtn.textContent = 'Video chosen: ' + f.name;
+    pickInfo.textContent = 'Now tap play on any clip.';
+  };
+  pick.appendChild(pickBtn);
+  pick.appendChild(pickInfo);
+  pick.appendChild(fileIn);
+  out.parentNode.insertBefore(pick, out);
+
+  function cleanPlayer(player, m) {
+    player.textContent = '';
+    player.style.aspectRatio = 'auto';
+    player.style.height = 'auto';
+    player.style.paddingBottom = '0';
+    var v = document.createElement('video');
+    v.src = localUrl;
+    v.playsInline = true;
+    v.preload = 'auto';
+    v.style.width = '100%';
+    v.style.display = 'block';
+    v.style.background = '#000';
+    var len = m.end - m.start;
+
+    var bar = el('div', 'cleanbar');
+    bar.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 10px;background:#000;color:#fff;font-size:14px';
+    var pb = el('button', '', '⏸');
+    pb.type = 'button';
+    pb.style.cssText = 'background:none;border:0;color:#fff;font-size:20px;padding:4px 8px';
+    var rng = document.createElement('input');
+    rng.type = 'range'; rng.min = 0; rng.max = len; rng.step = 0.1; rng.value = 0;
+    rng.style.cssText = 'flex:1;min-width:0';
+    var tm = el('span', '', '0:00 / ' + fmt(len));
+    bar.appendChild(pb); bar.appendChild(rng); bar.appendChild(tm);
+
+    function toStart() { v.currentTime = m.start; }
+    v.addEventListener('loadedmetadata', function () { toStart(); v.play(); });
+    v.addEventListener('timeupdate', function () {
+      if (v.currentTime >= m.end) { v.pause(); toStart(); pb.textContent = '▶'; }
+      var t = Math.min(len, Math.max(0, v.currentTime - m.start));
+      rng.value = t;
+      tm.textContent = fmt(t) + ' / ' + fmt(len);
+    });
+    v.addEventListener('play', function () { pb.textContent = '⏸'; });
+    v.addEventListener('pause', function () { pb.textContent = '▶'; });
+    pb.onclick = function () { if (v.paused) v.play(); else v.pause(); };
+    rng.oninput = function () { v.currentTime = m.start + Number(rng.value); };
+    v.onclick = pb.onclick;
+
+    player.appendChild(v);
+    player.appendChild(bar);
+  }
+
+  var ytPromise = null;
+  function loadYT() {
+    if (ytPromise) return ytPromise;
+    ytPromise = new Promise(function (resolve) {
+      if (window.YT && window.YT.Player) return resolve(window.YT);
+      var prev = window.onYouTubeIframeAPIReady;
+      window.onYouTubeIframeAPIReady = function () {
+        if (prev) prev();
+        resolve(window.YT);
+      };
+      var tag = document.createElement('script');
+      tag.src = 'https://www.youtube.com/iframe_api';
+      document.head.appendChild(tag);
+    });
+    return ytPromise;
+  }
+
   function card(id, m, i) {
     var c = el('article', 'clip');
 
@@ -82,14 +167,32 @@
 
     // The video loads only when you tap play. start and end make it play just this moment.
     play.onclick = function () {
+      if (localUrl) { cleanPlayer(player, m); return; }
       player.textContent = '';
-      var f = document.createElement('iframe');
-      f.src = 'https://www.youtube-nocookie.com/embed/' + id +
-        '?start=' + m.start + '&end=' + m.end + '&autoplay=1&rel=0&playsinline=1';
-      f.title = m.title;
-      f.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen';
-      f.allowFullscreen = true;
-      player.appendChild(f);
+      var holder = document.createElement('div');
+      player.appendChild(holder);
+      loadYT().then(function (YT) {
+        var timer = null;
+        var yp = new YT.Player(holder, {
+          videoId: id,
+          host: 'https://www.youtube-nocookie.com',
+          playerVars: { start: m.start, autoplay: 1, rel: 0, playsinline: 1 },
+          events: {
+            onReady: function (e) {
+              e.target.seekTo(m.start, true);
+              e.target.playVideo();
+              timer = setInterval(function () {
+                var t = 0;
+                try { t = yp.getCurrentTime(); } catch (x) { return; }
+                if (t >= m.end) {
+                  yp.pauseVideo();
+                  yp.seekTo(m.start, true);
+                }
+              }, 250);
+            }
+          }
+        });
+      });
     };
 
     var info = el('div', 'info');
