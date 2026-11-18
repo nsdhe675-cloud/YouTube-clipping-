@@ -4,8 +4,12 @@
 // 2) ffmpeg makes it vertical 9:16 (blurred background) with the captions burned in
 // 3) the finished MP4 is sent back to the browser.
 //
-// Needs on the server: yt-dlp and ffmpeg (both on PATH).
-// Optional env: YTDLP_COOKIES=/path/to/cookies.txt  (helps when YouTube blocks the server)
+// Needs on the server: yt-dlp and ffmpeg (both on PATH). Keep yt-dlp up to date.
+// Optional env:
+//   YTDLP_COOKIES=/path/to/cookies.txt   (helps when YouTube blocks the server;
+//                                         the file is copied first, so read-only
+//                                         Render Secret Files work)
+//   ALLOWED_CHANNEL_IDS=UCxxxx,UCyyyy    (only these channels can be downloaded)
 
 const { spawn } = require("child_process");
 const fs = require("fs");
@@ -15,6 +19,10 @@ const path = require("path");
 const MAX_SECONDS = 65;
 const MAX_PARALLEL = 2;
 const TIMEOUT_MS = 4 * 60 * 1000;
+const ALLOWED = (process.env.ALLOWED_CHANNEL_IDS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 let running = 0;
 
 function send(res, code, obj) {
@@ -34,11 +42,15 @@ function readBody(req) {
   });
 }
 
+// Runs a command. Resolves with stdout. On failure, the error message is the
+// real "ERROR:" line from the tool (not just the last warning).
 function run(cmd, args, opts = {}) {
   return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { ...opts, stdio: ["ignore", "ignore", "pipe"] });
+    const p = spawn(cmd, args, { ...opts, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
     let err = "";
-    p.stderr.on("data", (d) => { err = (err + d).slice(-4000); });
+    p.stdout.on("data", (d) => { out = (out + d).slice(-20000); });
+    p.stderr.on("data", (d) => { err = (err + d).slice(-8000); });
     const timer = setTimeout(() => { p.kill("SIGKILL"); reject(new Error(cmd + " timed out")); }, TIMEOUT_MS);
     p.on("error", (e) => {
       clearTimeout(timer);
@@ -46,8 +58,10 @@ function run(cmd, args, opts = {}) {
     });
     p.on("close", (code) => {
       clearTimeout(timer);
-      if (code === 0) resolve();
-      else reject(new Error(cmd + " failed: " + err.split("\n").filter(Boolean).slice(-2).join(" ")));
+      if (code === 0) return resolve(out);
+      const lines = err.split("\n").map((l) => l.trim()).filter(Boolean);
+      const bad = lines.slice().reverse().find((l) => /ERROR/i.test(l)) || lines[lines.length - 1] || "unknown error";
+      reject(new Error(cmd + " failed: " + bad.slice(0, 300)));
     });
   });
 }
@@ -95,18 +109,34 @@ module.exports = async function download(req, res) {
 
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "clip-"));
 
+    // Common yt-dlp args. Cookies are copied into the temp dir because yt-dlp
+    // wants to write to the cookie file (fails on read-only Secret Files).
+    const common = ["--no-playlist"];
+    const cookieSrc = process.env.YTDLP_COOKIES;
+    if (cookieSrc && fs.existsSync(cookieSrc)) {
+      const cookieCopy = path.join(dir, "cookies.txt");
+      fs.copyFileSync(cookieSrc, cookieCopy);
+      common.push("--cookies", cookieCopy);
+    }
+    const videoUrl = "https://www.youtube.com/watch?v=" + id;
+
+    // 0) Optional: only allow videos from approved channels
+    if (ALLOWED.length) {
+      const printed = await run("yt-dlp", [...common, "--skip-download", "--print", "%(channel_id)s", videoUrl]);
+      const cid = printed.trim().split("\n")[0];
+      if (!ALLOWED.includes(cid)) return send(res, 403, { error: "This channel is not allowed." });
+    }
+
     // 1) yt-dlp: fetch only this section
-    const ytArgs = [
-      "--no-playlist",
+    await run("yt-dlp", [
+      ...common,
       "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
       "--download-sections", `*${start}-${end}`,
       "--force-keyframes-at-cuts",
       "--merge-output-format", "mp4",
       "-o", path.join(dir, "src.%(ext)s"),
-    ];
-    if (process.env.YTDLP_COOKIES) ytArgs.push("--cookies", process.env.YTDLP_COOKIES);
-    ytArgs.push("https://www.youtube.com/watch?v=" + id);
-    await run("yt-dlp", ytArgs);
+      videoUrl,
+    ]);
 
     const src = fs.readdirSync(dir).find((f) => f.startsWith("src."));
     if (!src) throw new Error("Download produced no file");
@@ -159,6 +189,7 @@ module.exports = async function download(req, res) {
     rs.pipe(res);
     dir = null; // cleanup now handled by the stream
   } catch (e) {
+    console.error("download failed:", e.message);
     send(res, 500, { error: "Failed: " + e.message });
   } finally {
     running--;
