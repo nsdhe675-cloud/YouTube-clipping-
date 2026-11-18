@@ -88,77 +88,6 @@
   pick.appendChild(fileIn);
   out.parentNode.insertBefore(pick, out);
 
-  function cleanPlayer(player, m) {
-    player.textContent = '';
-    player.style.cssText = 'aspect-ratio:auto;height:auto;padding:0;max-width:340px;margin:0 auto;background:#000;border-radius:16px;overflow:hidden;position:relative';
-    var len = m.end - m.start;
-    var caps = m.captions || [];
-
-    var box = el('div', '');
-    box.style.cssText = 'position:relative;width:100%;aspect-ratio:9/16;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden';
-    var v = document.createElement('video');
-    v.src = localUrl;
-    v.playsInline = true;
-    v.preload = 'auto';
-    v.style.cssText = 'width:100%;height:auto;max-height:100%;display:block';
-    var bg = document.createElement('canvas');
-    bg.width = 64; bg.height = 114;
-    bg.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;filter:blur(18px) brightness(.7);transform:scale(1.3)';
-    var bgx = bg.getContext('2d');
-    var bgTimer = setInterval(function () {
-      if (!document.body.contains(bg)) { clearInterval(bgTimer); return; }
-      try { if (v.videoWidth) bgx.drawImage(v, 0, 0, bg.width, bg.height); } catch (e) {}
-    }, 200);
-    var cap = el('div', '', '');
-    cap.style.cssText = 'position:absolute;left:8px;right:8px;bottom:18%;text-align:center;color:#fff;font-weight:800;font-size:22px;line-height:1.2;text-transform:uppercase;text-shadow:-2px -2px 0 #000,2px -2px 0 #000,-2px 2px 0 #000,2px 2px 0 #000;pointer-events:none';
-    box.appendChild(bg);
-    box.appendChild(v);
-    box.appendChild(cap);
-    v.style.position = 'relative';
-
-    var bar = el('div', 'cleanbar');
-    bar.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 10px;background:#111;color:#fff;font-size:14px';
-    var pb = el('button', '', '⏸');
-    pb.type = 'button';
-    pb.style.cssText = 'background:none;border:0;color:#fff;font-size:20px;padding:4px 8px';
-    var rng = document.createElement('input');
-    rng.type = 'range'; rng.min = 0; rng.max = len; rng.step = 0.1; rng.value = 0;
-    rng.style.cssText = 'flex:1;min-width:0';
-    var tm = el('span', '', '0:00 / ' + fmt(len));
-    bar.appendChild(pb); bar.appendChild(rng); bar.appendChild(tm);
-
-    function toStart() { v.currentTime = m.start; }
-    function showCap(t) {
-      var text = '';
-      for (var k = 0; k < caps.length; k++) {
-        if (caps[k].at <= t) text = (t - caps[k].at < 4) ? caps[k].text : '';
-        else break;
-      }
-      cap.textContent = text;
-    }
-    v.addEventListener('loadedmetadata', function () { toStart(); v.play(); });
-    v.addEventListener('timeupdate', function () {
-      if (v.currentTime >= m.end) { v.pause(); toStart(); pb.textContent = '▶'; }
-      var t = Math.min(len, Math.max(0, v.currentTime - m.start));
-      rng.value = t;
-      tm.textContent = fmt(t) + ' / ' + fmt(len);
-      showCap(t);
-    });
-    v.addEventListener('play', function () { pb.textContent = '⏸'; });
-    v.addEventListener('pause', function () { pb.textContent = '▶'; });
-    pb.onclick = function () { if (v.paused) v.play(); else v.pause(); };
-    rng.oninput = function () { v.currentTime = m.start + Number(rng.value); };
-    v.onclick = pb.onclick;
-
-    player.appendChild(box);
-    player.appendChild(bar);
-    if (m.score) {
-      var sc = el('div', '', '🔥 ' + m.score.toFixed(1));
-      sc.style.cssText = 'text-align:center;color:#fff;font-weight:700;padding:8px;background:#111';
-      player.appendChild(sc);
-    }
-  }
-
   // ---- Download a clip: cut from YOUR OWN chosen video file, captions burned in ----
   // Records the clip in real time (about as long as the clip) into a 9:16 video file.
   function pickMime() {
@@ -388,63 +317,159 @@
     return ytPromise;
   }
 
-  function card(id, m, i) {
-    var c = el('article', 'clip');
+  // ---- Studio view: swipeable vertical (9:16) clip cards with live captions ----
+  var studioCss = document.createElement('style');
+  studioCss.textContent = [
+    '.sstrip{display:flex;gap:14px;overflow-x:auto;scroll-snap-type:x mandatory;padding:6px calc(50% - min(36vw,150px)) 14px;-webkit-overflow-scrolling:touch;scrollbar-width:none}',
+    '.sstrip::-webkit-scrollbar{display:none}',
+    '.sclip{flex:0 0 min(72vw,300px);scroll-snap-align:center;opacity:.5;transform:scale(.94);transition:opacity .2s,transform .2s;color:#fff}',
+    '.sclip.on{opacity:1;transform:none}',
+    '.sbox{position:relative;aspect-ratio:9/16;border-radius:22px;overflow:hidden;background:#111}',
+    '.sbg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(22px) brightness(.65);transform:scale(1.4)}',
+    '.sstage{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);aspect-ratio:16/9;background:#000}',
+    '.sstage .sth,.sstage video,.sstage iframe{position:absolute;inset:0;width:100%;height:100%;border:0;object-fit:cover}',
+    '.sstage .shit{position:absolute;inset:0;width:100%;height:100%;background:transparent;border:0;padding:0;z-index:2}',
+    '.splay{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:3;width:64px;height:64px;border-radius:50%;border:0;background:rgba(0,0,0,.5);color:#fff;display:flex;align-items:center;justify-content:center;padding:0}',
+    '.splay svg{width:28px;height:28px}',
+    '.scap{position:absolute;left:10px;right:10px;bottom:17%;z-index:3;text-align:center;font-weight:800;font-size:22px;line-height:1.2;text-transform:uppercase;pointer-events:none;text-shadow:-2px -2px 0 #000,2px -2px 0 #000,-2px 2px 0 #000,2px 2px 0 #000}',
+    '.sbadge{position:absolute;top:12px;left:12px;z-index:3;background:rgba(0,0,0,.55);border-radius:999px;padding:4px 10px;font-size:13px;font-weight:700}',
+    '.sbar{position:absolute;left:12px;right:12px;bottom:12px;z-index:3;display:flex;align-items:center;gap:10px;font-size:13px}',
+    '.sbar input{flex:1;min-width:0}',
+    '.sscore{text-align:center;font-weight:700;padding:10px 0 4px;opacity:.85}',
+    '.sinfo{padding:6px 2px 0}',
+    '.sinfo h2{font-size:16px;margin:0 0 6px;display:flex;gap:8px;align-items:flex-start}',
+    '.sinfo p{margin:0 0 8px;font-size:14px;opacity:.75}'
+  ].join('\n');
+  document.head.appendChild(studioCss);
 
-    var player = el('div', 'player');
-    var img = document.createElement('img');
-    img.src = 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg';
-    img.alt = '';
-    img.loading = 'lazy';
-    player.appendChild(img);
+  function studioCard(id, m, i, total) {
+    var len = m.end - m.start;
+    var caps = m.captions || [];
+    var c = el('article', 'sclip');
+    var box = el('div', 'sbox');
 
-    var play = el('button', 'playbtn');
+    var thumbSrc = 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg';
+    var bg = document.createElement('img');
+    bg.className = 'sbg'; bg.alt = ''; bg.src = thumbSrc;
+    var stage = el('div', 'sstage');
+    var th = document.createElement('img');
+    th.className = 'sth'; th.alt = ''; th.loading = 'lazy'; th.src = thumbSrc;
+    stage.appendChild(th);
+
+    var play = el('button', 'splay');
     play.type = 'button';
     play.setAttribute('aria-label', 'Play ' + m.title);
-    play.innerHTML = '<span>' + PLAY_ICON + '</span>';
-    player.appendChild(play);
-    player.appendChild(el('span', 'time', fmt(m.start) + ' – ' + fmt(m.end)));
+    play.innerHTML = PLAY_ICON;
+    var cap = el('div', 'scap');
+    var badge = el('div', 'sbadge', fmt(m.start) + ' – ' + fmt(m.end));
+    var bar = el('div', 'sbar');
+    var rng = document.createElement('input');
+    rng.type = 'range'; rng.min = 0; rng.max = len; rng.step = 0.1; rng.value = 0;
+    var tm = el('span', '', '0:00 / ' + fmt(len));
+    bar.appendChild(rng);
+    bar.appendChild(tm);
 
-    // The video loads only when you tap play. start and end make it play just this moment.
-    play.onclick = function () {
-      if (localUrl) { cleanPlayer(player, m); return; }
-      player.textContent = '';
-      var holder = document.createElement('div');
-      player.appendChild(holder);
-      loadYT().then(function (YT) {
-        var timer = null;
-        var yp = new YT.Player(holder, {
-          videoId: id,
-          host: 'https://www.youtube-nocookie.com',
-          playerVars: { start: m.start, autoplay: 1, rel: 0, playsinline: 1 },
-          events: {
-            onReady: function (e) {
-              e.target.seekTo(m.start, true);
-              e.target.playVideo();
-              timer = setInterval(function () {
-                var t = 0;
-                try { t = yp.getCurrentTime(); } catch (x) { return; }
-                if (t >= m.end) {
-                  yp.pauseVideo();
-                  yp.seekTo(m.start, true);
-                }
-              }, 250);
-            }
-          }
+    box.appendChild(bg);
+    box.appendChild(stage);
+    box.appendChild(cap);
+    box.appendChild(badge);
+    box.appendChild(play);
+    box.appendChild(bar);
+
+    var ctl = null, ticker = null, started = false;
+
+    function capAt(t) {
+      var text = '';
+      for (var k = 0; k < caps.length; k++) {
+        if (caps[k].at <= t) text = (t - caps[k].at < 4) ? caps[k].text : '';
+        else break;
+      }
+      return text;
+    }
+    function tick() {
+      if (!document.body.contains(c)) { clearInterval(ticker); return; }
+      try {
+        var t = ctl.time();
+        if (t >= len) { ctl.seek(0); t = 0; }
+        if (t < 0) t = 0;
+        rng.value = t;
+        tm.textContent = fmt(t) + ' / ' + fmt(len);
+        cap.textContent = capAt(t);
+        play.style.display = ctl.paused() ? '' : 'none';
+      } catch (e) { /* player not ready yet */ }
+    }
+    function toggle() {
+      try {
+        if (ctl.paused()) { pauseOthers(); ctl.play(); } else ctl.pause();
+      } catch (e) {}
+    }
+    function wire() {
+      var hit = el('button', 'shit');
+      hit.type = 'button';
+      hit.setAttribute('aria-label', 'Play or pause');
+      hit.onclick = toggle;
+      stage.appendChild(hit);
+      pauseOthers();
+      activeCtl = ctl;
+      ticker = setInterval(tick, 150);
+    }
+    function start() {
+      started = true;
+      if (localUrl) {
+        var v = document.createElement('video');
+        v.src = localUrl; v.playsInline = true; v.preload = 'auto';
+        stage.appendChild(v);
+        v.addEventListener('loadedmetadata', function () { v.currentTime = m.start; v.play(); });
+        ctl = {
+          play: function () { v.play(); },
+          pause: function () { v.pause(); },
+          seek: function (t) { v.currentTime = m.start + t; },
+          time: function () { return v.currentTime - m.start; },
+          paused: function () { return v.paused; }
+        };
+        wire();
+      } else {
+        var holder = document.createElement('div');
+        stage.appendChild(holder);
+        loadYT().then(function (YT) {
+          var yp = new YT.Player(holder, {
+            videoId: id,
+            host: 'https://www.youtube-nocookie.com',
+            playerVars: { start: m.start, autoplay: 1, rel: 0, playsinline: 1, controls: 0, disablekb: 1, modestbranding: 1 },
+            events: { onReady: function (e) { e.target.seekTo(m.start, true); e.target.playVideo(); } }
+          });
+          ctl = {
+            play: function () { yp.playVideo(); },
+            pause: function () { yp.pauseVideo(); },
+            seek: function (t) { yp.seekTo(m.start + t, true); },
+            time: function () { return yp.getCurrentTime() - m.start; },
+            paused: function () { var s = yp.getPlayerState(); return s === 2 || s === 5 || s === 0; }
+          };
+          wire();
         });
-      });
-    };
+      }
+    }
+    play.onclick = function () { if (!started) start(); else if (ctl) toggle(); };
+    rng.oninput = function () { if (ctl) { try { ctl.seek(Number(rng.value)); } catch (e) {} } };
+    c.pauseNow = function () { if (ctl) { try { ctl.pause(); } catch (e) {} } };
 
-    var info = el('div', 'info');
+    c.appendChild(box);
+    if (m.score) c.appendChild(el('div', 'sscore', '🔥 ' + Number(m.score).toFixed(1)));
+
+    var info = el('div', 'sinfo');
     var h = el('h2');
     h.appendChild(el('span', 'num', String(i + 1)));
     h.appendChild(document.createTextNode(m.title));
     info.appendChild(h);
     if (m.reason) info.appendChild(el('p', '', m.reason));
-    info.appendChild(el('p', '', 'Length: ' + fmt(m.end - m.start)));
+    info.appendChild(el('p', '', 'Clip ' + (i + 1) + ' of ' + total + ' · ' + fmt(len)));
 
     var row = el('div', 'row');
     var link = 'https://youtu.be/' + id + '?t=' + m.start;
+
+    var dl = el('button', 'btn small', 'Download clip');
+    dl.type = 'button';
+    dl.onclick = function () { downloadClip(m, dl, id); };
 
     var cp = el('button', 'btn alt small', 'Copy link');
     cp.type = 'button';
@@ -460,20 +485,18 @@
     op.target = '_blank';
     op.rel = 'noopener';
 
+    row.appendChild(dl);
     row.appendChild(cp);
     row.appendChild(op);
-
-    var dl = el('button', 'btn small', 'Download clip');
-    dl.type = 'button';
-    dl.onclick = function () { downloadClip(m, dl, id); };
-    row.appendChild(dl);
-
     if (window.addCutButtons) window.addCutButtons(row, m);
     info.appendChild(row);
-
-    c.appendChild(player);
     c.appendChild(info);
     return c;
+  }
+
+  var activeCtl = null;
+  function pauseOthers() {
+    if (activeCtl) { try { activeCtl.pause(); } catch (e) {} }
   }
 
   function render(d) {
@@ -483,9 +506,34 @@
       return;
     }
     clearStatus();
-    d.moments.forEach(function (m, i) { out.appendChild(card(d.id, m, i)); });
+    activeCtl = null;
+    var strip = el('div', 'sstrip');
+    d.moments.forEach(function (m, i) {
+      strip.appendChild(studioCard(d.id, m, i, d.moments.length));
+    });
+    out.appendChild(strip);
+    var cards = Array.prototype.slice.call(strip.children);
+    if (window.IntersectionObserver) {
+      cards[0].classList.add('on');
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          e.target.classList.toggle('on', e.isIntersecting);
+          if (!e.isIntersecting && e.target.pauseNow) e.target.pauseNow();
+        });
+      }, { root: strip, threshold: 0.6 });
+      cards.forEach(function (ch) { io.observe(ch); });
+    } else {
+      cards.forEach(function (ch) { ch.classList.add('on'); });
+    }
     out.firstChild.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
+
+  // The old note said downloads need your own file. The server can now download from the link.
+  Array.prototype.forEach.call(document.querySelectorAll('p,small,span,div,li'), function (n) {
+    if (!n.children.length && /^To download a clip, choose your own video file/.test(n.textContent.trim())) {
+      n.textContent = 'Tap Download clip on any clip, or choose your own video file for cleaner clips. Only use videos you own or have permission to use.';
+    }
+  });
 
   form.addEventListener('submit', function (e) {
     e.preventDefault();
