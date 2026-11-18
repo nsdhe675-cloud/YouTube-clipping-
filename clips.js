@@ -28,8 +28,10 @@ module.exports = async function clips(req, res) {
       "Find the 5 to 8 best moments in this video for short clips " +
       "(funny, surprising, useful or emotional). Each clip must be about 1 minute long, between 55 and 65 seconds, never longer. " +
       "Reply ONLY with JSON: " +
-      '{"moments":[{"title":"","reason":"","start":0,"end":0}]} ' +
-      "start and end are whole seconds.";
+      '{"moments":[{"title":"","reason":"","start":0,"end":0,"score":7.5,"captions":[{"at":0,"text":""}]}]} ' +
+      "start and end are whole seconds in the video. " +
+      "score is how likely the clip is to go viral, 1 to 10, one decimal. captions are short subtitle lines (3 to 7 words) of what is said, " +
+      "one every 2 to 3 seconds. at is seconds from the START of the clip.";
 
     const out = await askGemini(
       [
@@ -38,7 +40,7 @@ module.exports = async function clips(req, res) {
       ],
       {
         json: true,
-        maxOutputTokens: 3000,
+        maxOutputTokens: 8000,
         timeoutMs: 120000,
         generationConfig: { mediaResolution: "MEDIA_RESOLUTION_LOW" },
       }
@@ -51,6 +53,12 @@ module.exports = async function clips(req, res) {
         reason: String(m.reason || ""),
         start: Math.max(0, Math.floor(Number(m.start))),
         end: Math.floor(Number(m.end)),
+        score: Math.min(10, Math.max(0, Number(m.score) || 0)),
+        captions: (Array.isArray(m.captions) ? m.captions : [])
+          .map((c) => ({ at: Number(c.at), text: String(c.text || "").slice(0, 80) }))
+          .filter((c) => Number.isFinite(c.at) && c.at >= 0 && c.text)
+          .sort((a, b) => a.at - b.at)
+          .slice(0, 40),
       }))
       .map((m) => ({ ...m, end: Math.min(m.end, m.start + 65) }))
       .filter((m) => Number.isFinite(m.start) && Number.isFinite(m.end) && m.end > m.start)
