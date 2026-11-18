@@ -148,7 +148,7 @@
         reset('Saved ✓', 3000);
       })
       .catch(function (e) {
-        reset(String(e.message || 'Download failed').slice(0, 60), 6000);
+        reset(String(e.message || 'Download failed').slice(0, 160), 8000);
       });
   }
 
