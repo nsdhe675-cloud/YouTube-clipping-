@@ -1,6 +1,6 @@
 // server.js - small complete server. No npm packages needed. Run: node server.js
 // Put clips.html, clips-style.css, clips-ui.js and clips-cut-ui.js in a folder called "public".
-// Put clips-cut.js and clips.js next to this file.
+// Put clips-cut.js, download.js and clips.js next to this file.
 'use strict';
 
 var http = require('http');
@@ -8,6 +8,7 @@ var fs = require('fs');
 var path = require('path');
 
 var cut = require('./clips-cut');
+var download = require('./download');
 var clips = require('./clips');
 
 var PUBLIC = path.join(__dirname, 'public');
@@ -22,6 +23,10 @@ http.createServer(function (req, res) {
 
   if (req.method === 'POST' && pathname === '/api/research/cut') {
     return cut(req, res);
+  }
+
+  if (req.method === 'POST' && pathname === '/api/research/download') {
+    return download(req, res);
   }
 
   if (req.method === 'GET' && pathname === '/api/research/clips') {
