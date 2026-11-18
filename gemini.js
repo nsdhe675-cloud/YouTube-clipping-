@@ -1,9 +1,10 @@
 'use strict';
 // gemini.js: asks Gemini and tries several models in order.
 // If a model is retired, busy or over its limit, the next one is tried.
+// When every model is busy (503/429), it waits a few seconds and goes through the list again.
 // Needs GEMINI_API_KEY in Render. GEMINI_MODEL is optional (it is tried first).
 
-const MODELS = () => [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-flash-lite-latest']
+const MODELS = () => [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-flash-lite-latest', 'gemini-2.5-flash', 'gemini-2.5-flash-lite']
   .filter((x, i, a) => x && a.indexOf(x) === i);
 
 async function askGemini(parts, opts) {
@@ -14,6 +15,11 @@ async function askGemini(parts, opts) {
   if (opts.json) config.responseMimeType = 'application/json';
 
   let lastError = 'The AI did not answer.';
+  const ROUNDS = 3;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let round = 0; round < ROUNDS; round++) {
+  let busy = false; // true if any model failed because of overload / limits / network
+  if (round > 0) await sleep(round * 3000);
   for (const model of MODELS()) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), opts.timeoutMs || 70000);
@@ -35,11 +41,15 @@ async function askGemini(parts, opts) {
       const msg = String((j && j.error && j.error.message) || '').slice(0, 200);
       console.error('Gemini', model, r.status, msg);
       lastError = 'Gemini ' + r.status + (msg ? ': ' + msg : '');
+      if (r.status === 429 || r.status >= 500) busy = true;
       if (r.status === 401 || (r.status === 400 && /api key/i.test(msg))) throw new Error('Google did not accept GEMINI_API_KEY. Check it in Render.');
     } catch (e) {
       if (e && /GEMINI_API_KEY/.test(e.message || '')) throw e;
       lastError = e && e.name === 'AbortError' ? 'The AI took too long to answer.' : 'Could not reach the AI.';
+      busy = true;
     } finally { clearTimeout(timer); }
+  }
+  if (!busy) break; // a real error (bad key, bad request): retrying will not help
   }
   throw new Error(lastError);
 }
