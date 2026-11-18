@@ -90,20 +90,34 @@
 
   function cleanPlayer(player, m) {
     player.textContent = '';
-    player.style.aspectRatio = 'auto';
-    player.style.height = 'auto';
-    player.style.paddingBottom = '0';
+    player.style.cssText = 'aspect-ratio:auto;height:auto;padding:0;max-width:340px;margin:0 auto;background:#000;border-radius:16px;overflow:hidden;position:relative';
+    var len = m.end - m.start;
+    var caps = m.captions || [];
+
+    var box = el('div', '');
+    box.style.cssText = 'position:relative;width:100%;aspect-ratio:9/16;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden';
     var v = document.createElement('video');
     v.src = localUrl;
     v.playsInline = true;
     v.preload = 'auto';
-    v.style.width = '100%';
-    v.style.display = 'block';
-    v.style.background = '#000';
-    var len = m.end - m.start;
+    v.style.cssText = 'width:100%;height:auto;max-height:100%;display:block';
+    var bg = document.createElement('canvas');
+    bg.width = 64; bg.height = 114;
+    bg.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;filter:blur(18px) brightness(.7);transform:scale(1.3)';
+    var bgx = bg.getContext('2d');
+    var bgTimer = setInterval(function () {
+      if (!document.body.contains(bg)) { clearInterval(bgTimer); return; }
+      try { if (v.videoWidth) bgx.drawImage(v, 0, 0, bg.width, bg.height); } catch (e) {}
+    }, 200);
+    var cap = el('div', '', '');
+    cap.style.cssText = 'position:absolute;left:8px;right:8px;bottom:18%;text-align:center;color:#fff;font-weight:800;font-size:22px;line-height:1.2;text-transform:uppercase;text-shadow:-2px -2px 0 #000,2px -2px 0 #000,-2px 2px 0 #000,2px 2px 0 #000;pointer-events:none';
+    box.appendChild(bg);
+    box.appendChild(v);
+    box.appendChild(cap);
+    v.style.position = 'relative';
 
     var bar = el('div', 'cleanbar');
-    bar.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 10px;background:#000;color:#fff;font-size:14px';
+    bar.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 10px;background:#111;color:#fff;font-size:14px';
     var pb = el('button', '', '⏸');
     pb.type = 'button';
     pb.style.cssText = 'background:none;border:0;color:#fff;font-size:20px;padding:4px 8px';
@@ -114,12 +128,21 @@
     bar.appendChild(pb); bar.appendChild(rng); bar.appendChild(tm);
 
     function toStart() { v.currentTime = m.start; }
+    function showCap(t) {
+      var text = '';
+      for (var k = 0; k < caps.length; k++) {
+        if (caps[k].at <= t) text = (t - caps[k].at < 4) ? caps[k].text : '';
+        else break;
+      }
+      cap.textContent = text;
+    }
     v.addEventListener('loadedmetadata', function () { toStart(); v.play(); });
     v.addEventListener('timeupdate', function () {
       if (v.currentTime >= m.end) { v.pause(); toStart(); pb.textContent = '▶'; }
       var t = Math.min(len, Math.max(0, v.currentTime - m.start));
       rng.value = t;
       tm.textContent = fmt(t) + ' / ' + fmt(len);
+      showCap(t);
     });
     v.addEventListener('play', function () { pb.textContent = '⏸'; });
     v.addEventListener('pause', function () { pb.textContent = '▶'; });
@@ -127,8 +150,13 @@
     rng.oninput = function () { v.currentTime = m.start + Number(rng.value); };
     v.onclick = pb.onclick;
 
-    player.appendChild(v);
+    player.appendChild(box);
     player.appendChild(bar);
+    if (m.score) {
+      var sc = el('div', '', '🔥 ' + m.score.toFixed(1));
+      sc.style.cssText = 'text-align:center;color:#fff;font-weight:700;padding:8px;background:#111';
+      player.appendChild(sc);
+    }
   }
 
   var ytPromise = null;
