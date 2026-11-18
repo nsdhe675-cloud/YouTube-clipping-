@@ -159,6 +159,218 @@
     }
   }
 
+  // ---- Download a clip: cut from YOUR OWN chosen video file, captions burned in ----
+  // Records the clip in real time (about as long as the clip) into a 9:16 video file.
+  function pickMime() {
+    if (!window.MediaRecorder) return '';
+    var list = [
+      'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm'
+    ];
+    for (var i = 0; i < list.length; i++) {
+      if (MediaRecorder.isTypeSupported(list[i])) return list[i];
+    }
+    return '';
+  }
+
+  function wrapText(ctx, text, maxW) {
+    var words = text.split(' ');
+    var lines = [];
+    var line = '';
+    words.forEach(function (w) {
+      var test = line ? line + ' ' + w : w;
+      if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = w; }
+      else line = test;
+    });
+    if (line) lines.push(line);
+    return lines;
+  }
+
+  // No file chosen: the server downloads the clip from the YouTube link (yt-dlp + ffmpeg).
+  function serverDownload(id, m, btn, reset) {
+    btn.disabled = true;
+    btn.textContent = 'Cutting on server…';
+    fetch('/api/research/download', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: id, start: m.start, end: m.end, title: m.title, captions: m.captions || [] })
+    })
+      .then(function (r) {
+        if (!r.ok) {
+          return r.json().catch(function () { return {}; }).then(function (d) {
+            throw new Error(d.error || 'Server error');
+          });
+        }
+        return r.blob();
+      })
+      .then(function (blob) {
+        var name = (m.title || 'clip').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-').slice(0, 50) || 'clip';
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = name + '.mp4';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 60000);
+        reset('Saved ✓', 3000);
+      })
+      .catch(function (e) {
+        reset(String(e.message || 'Download failed').slice(0, 60), 6000);
+      });
+  }
+
+  function downloadClip(m, btn, id) {
+    var label = 'Download clip';
+    function reset(msg, ms) {
+      btn.disabled = false;
+      btn.textContent = msg || label;
+      if (msg) setTimeout(function () { btn.textContent = label; }, ms || 3000);
+    }
+
+    if (!localUrl) {
+      serverDownload(id, m, btn, reset);
+      return;
+    }
+    var mime = pickMime();
+    if (!mime || !HTMLCanvasElement.prototype.captureStream) {
+      reset('Not supported in this browser', 4000);
+      return;
+    }
+
+    var W = 720, H = 1280;
+    var len = m.end - m.start;
+    var caps = m.captions || [];
+    btn.disabled = true;
+    btn.textContent = 'Preparing…';
+
+    var v = document.createElement('video');
+    v.src = localUrl;
+    v.playsInline = true;
+    v.preload = 'auto';
+
+    var canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    var ctx = canvas.getContext('2d');
+    var small = document.createElement('canvas');
+    small.width = 36; small.height = 64;
+    var sctx = small.getContext('2d');
+
+    // Audio goes to the recording only, so nothing plays out loud.
+    var AC = window.AudioContext || window.webkitAudioContext;
+    var ac = new AC();
+    if (ac.resume) ac.resume();
+    var dest = ac.createMediaStreamDestination();
+    ac.createMediaElementSource(v).connect(dest);
+
+    var stream = canvas.captureStream(30);
+    dest.stream.getAudioTracks().forEach(function (t) { stream.addTrack(t); });
+
+    var chunks = [];
+    var rec;
+    try { rec = new MediaRecorder(stream, { mimeType: mime }); }
+    catch (e) { ac.close(); reset('Could not start recording', 4000); return; }
+    rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+
+    var running = false;
+    function cleanup() {
+      running = false;
+      v.pause();
+      v.removeAttribute('src');
+      v.load();
+      try { ac.close(); } catch (e) {}
+    }
+
+    rec.onstop = function () {
+      var ext = mime.indexOf('mp4') > -1 ? 'mp4' : 'webm';
+      var blob = new Blob(chunks, { type: mime.split(';')[0] });
+      var name = (m.title || 'clip').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-').slice(0, 50) || 'clip';
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name + '.' + ext;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 60000);
+      cleanup();
+      reset('Saved ✓', 3000);
+    };
+
+    function currentCaption(t) {
+      var text = '';
+      for (var k = 0; k < caps.length; k++) {
+        if (caps[k].at <= t) text = (t - caps[k].at < 4) ? caps[k].text : '';
+        else break;
+      }
+      return text;
+    }
+
+    function draw() {
+      if (!running) return;
+      var vw = v.videoWidth, vh = v.videoHeight;
+      if (vw) {
+        // Blurred, darkened background (small frame stretched up)
+        sctx.drawImage(v, 0, 0, small.width, small.height);
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(small, 0, 0, W, H);
+        ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        ctx.fillRect(0, 0, W, H);
+        // Video centered, fitted inside 9:16
+        var s = Math.min(W / vw, H / vh);
+        var dw = vw * s, dh = vh * s;
+        ctx.drawImage(v, (W - dw) / 2, (H - dh) / 2, dw, dh);
+        // Captions
+        var t = Math.max(0, v.currentTime - m.start);
+        var text = currentCaption(t).toUpperCase();
+        if (text) {
+          ctx.font = '800 46px -apple-system, "Segoe UI", Arial, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'alphabetic';
+          ctx.lineJoin = 'round';
+          ctx.lineWidth = 9;
+          ctx.strokeStyle = '#000';
+          ctx.fillStyle = '#fff';
+          var lines = wrapText(ctx, text, W - 80);
+          var y = H * 0.8 - (lines.length - 1) * 56;
+          lines.forEach(function (ln, i) {
+            ctx.strokeText(ln, W / 2, y + i * 56);
+            ctx.fillText(ln, W / 2, y + i * 56);
+          });
+        }
+        btn.textContent = 'Recording ' + fmt(Math.min(len, t)) + ' / ' + fmt(len);
+      }
+      if (v.currentTime >= m.end || v.ended) {
+        running = false;
+        if (rec.state !== 'inactive') rec.stop();
+        return;
+      }
+      requestAnimationFrame(draw);
+    }
+
+    v.addEventListener('error', function () {
+      if (rec.state !== 'inactive') { rec.onstop = null; rec.stop(); }
+      cleanup();
+      reset('Could not read the video file', 4000);
+    });
+    v.addEventListener('loadedmetadata', function () { v.currentTime = m.start; });
+    v.addEventListener('seeked', function onSeeked() {
+      v.removeEventListener('seeked', onSeeked);
+      running = true;
+      rec.start(1000);
+      v.play().then(function () { requestAnimationFrame(draw); })
+        .catch(function () {
+          running = false;
+          rec.onstop = null;
+          if (rec.state !== 'inactive') rec.stop();
+          cleanup();
+          reset('Could not play the video', 4000);
+        });
+    });
+  }
+
   var ytPromise = null;
   function loadYT() {
     if (ytPromise) return ytPromise;
@@ -250,6 +462,12 @@
 
     row.appendChild(cp);
     row.appendChild(op);
+
+    var dl = el('button', 'btn small', 'Download clip');
+    dl.type = 'button';
+    dl.onclick = function () { downloadClip(m, dl, id); };
+    row.appendChild(dl);
+
     if (window.addCutButtons) window.addCutButtons(row, m);
     info.appendChild(row);
 
